@@ -5,7 +5,7 @@ Pack files into independent compressed volumes by predicting compressed size of 
 
 Using fpart's algorithm to allocate files.
 
-It only supports 7z now, but it can be improved to support zip, tar.*z, etc. Because there isn't a Python 7z library for writing, so the compressed data in predicting is not efficiently used.
+It only supports 7z now, but it can be improved to support zip, tar.*z, etc. There isn't a Python 7z library for writing, so the compressed data in predicting is not efficiently used.
 
 Usage
 -----
