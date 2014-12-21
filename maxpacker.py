@@ -75,11 +75,12 @@ class Partition:
 
 class Volumes:
 	"""Manages Volumes containing several Partitions"""
-	def __init__(self, prefix, filelist, maxsize, maxentries=0, samplesize=1024, algo=DEFLATE):
+	def __init__(self, prefix, filelist, maxsize, maxfilesize=0, maxentries=0, samplesize=1024, algo=DEFLATE):
 		# file = [path, size, partition]
 		self.prefix = prefix
 		self.rawfilelist = filelist
 		self.maxsize = maxsize
+		self.maxfilesize = maxfilesize
 		self.maxentries = maxentries
 		self.samplesize = samplesize
 		self.algo = algo
@@ -88,8 +89,9 @@ class Volumes:
 	def init(self):
 		eta = ETA(len(self.rawfilelist)-1, min_ms_between_updates=500)
 		for f, s in self.rawfilelist:
-			eta.print_status()
-			self.filelist.append([f, self.estimatesize(f, s), s, 0])
+			if self.maxfilesize > 0 and s <= self.maxfilesize:
+				eta.print_status()
+				self.filelist.append([f, self.estimatesize(f, s), s, 0])
 		eta.done()
 		self.minfilesize = min(map(lambda x: x[1], self.filelist))
 		self.partitions = self.dispatchfiles(self.filelist, self.maxsize, self.maxentries)
@@ -257,6 +259,7 @@ def findparent(paths):
 def main():
 	parser = argparse.ArgumentParser(description="Independent compressed volumes maxium packer.")
 	parser.add_argument("-s", "--maxsize", help="max volume size", default="1g")
+	parser.add_argument("--maxfilesize", help="max size of each file", default="0")
 	parser.add_argument("-n", "--dry-run", action="store_true", help="only allocate files")
 	parser.add_argument("-o", "--prefix", help="output files prefix")
 	# group = parser.add_mutually_exclusive_group()
@@ -280,10 +283,13 @@ def main():
 			for root, subFolders, files in os.walk(folder):
 				for name in files:
 					fn = os.path.join(root, name)
-					fl.append((fn, os.path.getsize(fn)))
+					try:
+						fl.append((fn, os.path.getsize(fn)))
+					except Exception as ex:
+						print(ex)
 
 	print("Calculating estimated compressed size...")
-	vol = Volumes(os.path.basename(parentdir) if args.prefix is None else args.prefix, fl, human2bytes(args.maxsize), algo=LZMA)
+	vol = Volumes(os.path.basename(parentdir) if args.prefix is None else args.prefix, fl, human2bytes(args.maxsize), maxfilesize=human2bytes(args.maxfilesize), algo=LZMA)
 	try:
 		vol.init()
 		print("Compressing...")
