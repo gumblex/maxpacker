@@ -29,6 +29,4 @@ optional arguments:
 
 License
 -------
-The program itself is released into Public Domain.
-
-The `eta.py` is licensed under BSD 3-clauses. see `LICENSE-eta`.
+MIT License.
