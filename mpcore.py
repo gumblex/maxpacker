@@ -3,6 +3,8 @@
 
 import os
 import re
+import sys
+import time
 import zlib
 import lzma
 import fnmatch
@@ -16,6 +18,37 @@ _ig1 = operator.itemgetter(1)
 _psize = operator.attrgetter('size')
 
 logging.basicConfig(stream=sys.stdout, format='%(asctime)s [%(levelname)s] %(message)s', level=logging.INFO)
+
+exts_ord = {e:i for i,e in enumerate(
+'''7z xz lzma ace arc arj bz tbz bz2 tbz2 cab deb gz tgz ha lha lzh lzo lzx pak rar rpm sit zoo
+zip jar ear war msi
+3gp avi mov mpeg mpg mpe wmv
+aac ape fla flac la mp3 m4a mp4 ofr ogg pac ra rm rka shn swa tta wv wma wav
+swf
+chm hxi hxs
+gif jpeg jpg jp2 png tiff bmp ico psd psp
+awg ps eps cgm dxf svg vrml wmf emf ai md
+cad dwg pps key sxi
+max 3ds
+iso bin nrg mdf img pdi tar cpio xpi
+vfd vhd vud vmc vsv
+vmdk dsk nvram vmem vmsd vmsn vmss vmtm
+inl inc idl acf asa h hpp hxx c cpp cxx rc java cs pas bas vb cls ctl frm dlg def
+f77 f f90 f95
+asm sql manifest dep
+mak clw csproj vcproj sln dsp dsw
+classf
+bat cmd
+xml xsd xsl xslt hxk hxc htm html xhtml xht mht mhtml htw asp aspx css cgi jsp shtml
+awk sed hta js php php3 php4 php5 phptml pl pm py pyo rb sh tcl vbs
+text txt tex ans asc srt reg ini doc docx mcw dot rtf hlp xls xlr xlt xlw ppt pdf
+sxc sxd sxi sxg sxw stc sti stw stm odt ott odg otg odp otp ods ots odf
+abw afp cwk lwp wpd wps wpt wrf wri
+abf afm bdf fon mgf otf pcf pfa snf ttf
+dbf mdb nsf ntf wdb db fdb gdb
+exe dll ocx vbx sfx sys tlb awx com obj lib out o so
+pdb pch idb ncb opt'''.split(), 1)}
+exts_ord[''] = 0
 
 def splitpath(path):
     '''
@@ -57,13 +90,27 @@ def human2bytes(s):
 			prefix[s] = 1 << (i+1)*10
 		return int(num * prefix[letter])
 
+def sizeof_fmt(num, suffix='B'):
+    for unit in ['','Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
+        if abs(num) < 1024:
+            return "%3.1f%s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.1f%s%s" % (num, 'Yi', suffix)
+
 class Volume:
-    def __init__(self, ffilter=None, compressfunc=None):
+    def __init__(self, packer, ffilter=None, compressfunc=None):
+        self.packer = packer
         self.ffilter = ffilter or TrueFilter()
         self.compressfunc = compressfunc
 
-    def scanpaths(self, paths):
+    def run(self, paths):
         parentdir = os.path.join(*os.path.commonprefix(tuple(map(splitpath, map(os.path.abspath, paths)))))
+        filelist, ignored = self.scanpaths(paths, parentdir)
+        parts = self.packer.dispatch(filelist)
+
+    def scanpaths(self, paths, prefix=None):
+        print(os.path.commonprefix(tuple(map(splitpath, map(os.path.abspath, paths)))))
+        prefix = prefix or os.path.join(*os.path.commonprefix(tuple(map(splitpath, map(os.path.abspath, paths)))))
         fl = []
         ignored = []
         logging.info("Scanning files...")
@@ -71,7 +118,7 @@ class Volume:
             if os.path.isfile(path):
                 try:
                     if self.ffilter(path):
-                        fl.append((path, os.path.getsize(path)))
+                        fl.append((os.path.relpath(path, prefix), os.path.getsize(path)))
                     else:
                         ignored.append(path)
                 except Exception as ex:
@@ -82,16 +129,11 @@ class Volume:
                         fn = os.path.join(root, name)
                         try:
                             if self.ffilter(fn):
-                                fl.append((fn, os.path.getsize(fn)))
+                                fl.append((os.path.relpath(fn, prefix), os.path.getsize(fn)))
                             else:
                                 ignored.append(fn)
                         except Exception as ex:
                             logging.exception("Can't access " + fn)
-        logging.info("## Ignored files:")
-        for fn in ignored:
-            print(fn)
-        logging.info("## End list.")
-        del ignored
         # estimate compressd size
         if callable(self.compressfunc):
             logging.info("Calculating estimated compressed size...")
@@ -104,7 +146,16 @@ class Volume:
                     logging.exception("Can't access " + path)
                 eta.print_status()
             eta.done()
-        self.filelist = fl
+        return fl, ignored
+
+    def genindex(self, filelist, ignored, partitions):
+        yield '# %s Total %s files, %s, %s partitions, %s ignored.' % (time.strftime('%Y-%m-%d %H:%M:%S'), len(filelist), sizeof_fmt(sum(map(_ig1, filelist))), len(partitions), len(ignored))
+        for pn, part in enumerate(partitions):
+            for fn in part.filelist:
+                yield "%03d\t%s" % (pn, fn)
+        yield "# Ignored files:"
+        for fn in ignored:
+            yield "#\t" + fn
 
     def estcompresssize(self, filename, fsize, err=0.1):
         if not fsize:
@@ -251,6 +302,18 @@ class TimeFilter(Filter):
 
 # Packing methods
 
+def sortbyext(val):
+    head, tail = os.path.split(val[0])
+    base, ext = os.path.splitext(tail)
+    ext = ext.lower().lstrip('.')
+    return exts_ord.get(ext, 999), ext, base, head
+
+def sortbyextlocal(val):
+    head, tail = os.path.split(val[0])
+    base, ext = os.path.splitext(tail)
+    ext = ext.lower().lstrip('.')
+    return head, exts_ord.get(ext, 999), ext, base
+
 class Partition:
     def __init__(self):
         self.filelist = []
@@ -274,6 +337,24 @@ class Partition:
     def addfile(self, filename, size):
         self.filelist.append(filename, size)
         self.size += size
+
+    def sortfile(self, level=0):
+        '''
+        Sort file according to filename:
+        0: No sort
+        1: Normal sort
+        2: Local 7z-style sort (within a directory)
+        3: Global 7z-style sort (within a partition)
+        '''
+        if level == 0:
+            return
+        if level == 1:
+            key = None
+        elif level == 2:
+            key = sortbyext
+        elif level == 3:
+            key = sortbyextlocal
+        self.filelist.sort(key=key)
 
 class PackerBase:
     def __repr__(self):
@@ -377,11 +458,14 @@ class PartNumberLimitPacker(PackerBase):
             n += 1
         assert n == len(filelist)
 
-class CopyOutput:
+def output_copy():
     pass
 
-class LinkOutput:
+def output_link():
     pass
 
-class SubprocessOutput:
+def output_7z():
+    pass
+
+def output_tar():
     pass
