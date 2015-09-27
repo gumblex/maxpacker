@@ -4,18 +4,29 @@
 import os
 import re
 import sys
-import time
+import bz2
 import zlib
 import lzma
+import time
+import shutil
 import fnmatch
 import logging
+import tarfile
+import zipfile
+import tempfile
 import operator
+import argparse
 import subprocess
+
+from eta import ETA
 
 __version__ = '2.0'
 
 _ig1 = operator.itemgetter(1)
 _psize = operator.attrgetter('size')
+
+DEFAULT_ENCODING = 'utf-8'
+tarfile.ENCODING = DEFAULT_ENCODING
 
 logging.basicConfig(stream=sys.stdout, format='%(asctime)s [%(levelname)s] %(message)s', level=logging.INFO)
 
@@ -71,24 +82,28 @@ def splitpath(path):
     folders.reverse()
     return folders
 
+basepath = lambda paths: os.path.join(*os.path.commonprefix(tuple(map(splitpath, map(os.path.abspath, paths)))))
+
 def human2bytes(s):
-	"""
-	>>> human2bytes('1M')
-	1048576
-	>>> human2bytes('1G')
-	1073741824
-	"""
-	try:
-		return int(s)
-	except ValueError:
-		symbols = ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y')
-		letter = s[-1:].strip().upper()
-		num = s[:-1]
-		num = float(num)
-		prefix = {symbols[0]: 1}
-		for i, s in enumerate(symbols[1:]):
-			prefix[s] = 1 << (i+1)*10
-		return int(num * prefix[letter])
+    """
+    >>> human2bytes('1M')
+    1048576
+    >>> human2bytes('1G')
+    1073741824
+    """
+    if s is None:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        symbols = ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y')
+        letter = s[-1:].strip().upper()
+        num = s[:-1]
+        num = float(num)
+        prefix = {symbols[0]: 1}
+        for i, s in enumerate(symbols[1:]):
+            prefix[s] = 1 << (i+1)*10
+        return int(num * prefix[letter])
 
 def sizeof_fmt(num, suffix='B'):
     for unit in ['','Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
@@ -98,18 +113,31 @@ def sizeof_fmt(num, suffix='B'):
     return "%.1f%s%s" % (num, 'Yi', suffix)
 
 class Volume:
-    def __init__(self, packer, ffilter=None, compressfunc=None):
+
+    def __init__(self, packer, ffilter=None, indexfile='index.txt', output=None, compressfunc=None, sortfile=0):
         self.packer = packer
         self.ffilter = ffilter or TrueFilter()
+        self.indexfile = indexfile or os.devnull
+        self.output = output or OutputBase()
         self.compressfunc = compressfunc
+        self.sortfile = sortfile
+        self.samplesize = 1024
 
-    def run(self, paths):
-        parentdir = os.path.join(*os.path.commonprefix(tuple(map(splitpath, map(os.path.abspath, paths)))))
-        filelist, ignored = self.scanpaths(paths, parentdir)
+    def run(self, paths, basedir=None):
+        self.output.output(self.partition(paths, basedir=None))
+
+    def partition(self, paths, basedir=None):
+        basedir = basedir or basepath(paths)
+        filelist, ignored = self.scanpaths(paths, basedir)
         parts = self.packer.dispatch(filelist)
+        for p in parts:
+            p.sortfile(self.sortfile)
+        with open(self.indexfile, 'w', encoding='utf-8') as f:
+            for ln in self.genindex(filelist, paths, ignored, parts):
+                f.write(ln + '\n')
+        return parts
 
     def scanpaths(self, paths, prefix=None):
-        print(os.path.commonprefix(tuple(map(splitpath, map(os.path.abspath, paths)))))
         prefix = prefix or os.path.join(*os.path.commonprefix(tuple(map(splitpath, map(os.path.abspath, paths)))))
         fl = []
         ignored = []
@@ -118,7 +146,7 @@ class Volume:
             if os.path.isfile(path):
                 try:
                     if self.ffilter(path):
-                        fl.append((os.path.relpath(path, prefix), os.path.getsize(path)))
+                        fl.append((os.path.relpath(path, prefix), os.path.getsize(path), os.path.getsize(path)))
                     else:
                         ignored.append(path)
                 except Exception as ex:
@@ -129,7 +157,7 @@ class Volume:
                         fn = os.path.join(root, name)
                         try:
                             if self.ffilter(fn):
-                                fl.append((os.path.relpath(fn, prefix), os.path.getsize(fn)))
+                                fl.append((os.path.relpath(fn, prefix), os.path.getsize(fn), os.path.getsize(fn)))
                             else:
                                 ignored.append(fn)
                         except Exception as ex:
@@ -139,23 +167,27 @@ class Volume:
             logging.info("Calculating estimated compressed size...")
             eta = ETA(len(fl), min_ms_between_updates=500)
             for k, v in enumerate(fl):
-                filename, size = v
+                filename, size, size2 = v
+                fn = os.path.join(prefix, filename)
                 try:
-                    fl[k] = (filename, self.estcompresssize(filename, size))
+                    fl[k] = (filename, size, self.estcompresssize(fn, size))
                 except Exception as ex:
                     logging.exception("Can't access " + path)
                 eta.print_status()
             eta.done()
         return fl, ignored
 
-    def genindex(self, filelist, ignored, partitions):
+    def genindex(self, filelist, paths, ignored, partitions, showignored=True):
+        for p in paths:
+            yield '# %s' % p
         yield '# %s Total %s files, %s, %s partitions, %s ignored.' % (time.strftime('%Y-%m-%d %H:%M:%S'), len(filelist), sizeof_fmt(sum(map(_ig1, filelist))), len(partitions), len(ignored))
         for pn, part in enumerate(partitions):
-            for fn in part.filelist:
+            for fn, estsize in part.filelist:
                 yield "%03d\t%s" % (pn, fn)
-        yield "# Ignored files:"
-        for fn in ignored:
-            yield "#\t" + fn
+        if showignored:
+            yield "# Ignored files:"
+            for fn in ignored:
+                yield "#\t" + fn
 
     def estcompresssize(self, filename, fsize, err=0.1):
         if not fsize:
@@ -235,9 +267,9 @@ class GlobFilter(Filter):
     An empty list means include all.
     '''
 
-    def __init__(self, include=(), exclude=()):
-        self.include = include or ('*',)
+    def __init__(self, exclude=(), include=()):
         self.exclude = exclude
+        self.include = include or ('*',)
 
     def __call__(self, filename):
         return (
@@ -252,9 +284,9 @@ class RegexFilter(Filter):
     An empty list means include all.
     '''
 
-    def __init__(self, include=(), exclude=()):
-        self.include = tuple(re.compile(r) for r in include or ('',))
+    def __init__(self, exclude=(), include=()):
         self.exclude = tuple(re.compile(r) for r in exclude)
+        self.include = tuple(re.compile(r) for r in include or ('',))
 
     def __call__(self, filename):
         return (
@@ -263,15 +295,18 @@ class RegexFilter(Filter):
 
 class SizeFilter(Filter):
     '''
-    Select files which is smaller than or equal to `maxsize`.
+    Select files whose size is between `minsize` and `maxsize`.
     If None, it selects all.
     '''
 
-    def __init__(self, maxsize=None):
+    def __init__(self, maxsize=None, minsize=None):
         self.maxsize = maxsize
+        self.minsize = minsize
 
     def __call__(self, filename):
-        return self.maxsize is None or os.path.getsize(filename) <= self.maxsize
+        filesize = os.path.getsize(filename)
+        return ((self.maxsize is None or filesize <= self.maxsize)
+            and (self.minsize is None or filesize >= self.minsize))
 
 class TimeFilter(Filter):
     '''
@@ -335,7 +370,7 @@ class Partition:
         return bool(self.filelist)
 
     def addfile(self, filename, size):
-        self.filelist.append(filename, size)
+        self.filelist.append((filename, size))
         self.size += size
 
     def sortfile(self, level=0):
@@ -390,6 +425,7 @@ class LimitPacker(PackerBase):
                 partitions[0] = temppart[0]
                 partitions.extend(filter(None, temppart[1:]))
             partitions.pop(0)
+        return partitions
 
     def single_dispatch(self, filelist, maxsize=0, maxentries=0):
         if maxsize:
@@ -400,7 +436,7 @@ class LimitPacker(PackerBase):
         else:
             partitions = [Partition()]
             pn = startp = 0
-        for filename, size in filelist:
+        for filename, origsize, size in filelist:
             if 0 < maxsize < size:
                 partitions[0].addfile(filename, size)
             else:
@@ -431,10 +467,10 @@ class PartNumberLimitPacker(PackerBase):
         # our list of partitions
         partitions = [Partition() for i in range(self.numentries)]
         # sort files with a fixed size of partitions
-        filelist = filelist.sort(key=_ig1, reverse=True)
+        filelist.sort(key=_ig1, reverse=True)
         emptyfiles = []
         # dispatch files
-        for filename, size in filelist:
+        for filename, origsize, size in filelist:
             if size > 0:
                 # find most approriate partition
                 part = min(partitions, key=_psize)
@@ -443,29 +479,193 @@ class PartNumberLimitPacker(PackerBase):
             else:
                 emptyfiles.append(filename)
         # re-dispatch empty files
-        self.spreadfiles(partitions, emptyfiles)
-        return partitions
-
-    def spreadfiles(self, partitions, filelist):
         fpp, rem = divmod(len(filelist), len(partitions))
         n = 0
         for part in partitions:
             for i in range(fpp):
-                part.addfile(filelist[n])
+                filename, origsize, size = filelist[n]
+                part.addfile(filename, size)
                 n += 1
         for i in range(rem):
-            part.addfile(filelist[n])
+            filename, origsize, size = filelist[n]
+            part.addfile(filename, size)
             n += 1
         assert n == len(filelist)
+        return partitions
 
-def output_copy():
-    pass
+class OutputBase:
+    def __init__(self, srcbase, dst, name=None):
+        self.srcbase = srcbase
+        self.dst = dst
+        self.name = name or '%03d'
 
-def output_link():
-    pass
+    def output(self, partitions):
+        pass
 
-def output_7z():
-    pass
+class OutputCopy(OutputBase):
+    def output(self, partitions):
+        for pn, part in enumerate(partitions):
+            d = os.path.abspath(os.path.join(self.dst, self.name % pn))
+            for fn, size in part.filelist:
+                dst = os.path.join(d, fn)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(os.path.join(self.srcbase, fn), dst)
 
-def output_tar():
-    pass
+class OutputLink(OutputBase):
+    def output(self, partitions):
+        for pn, part in enumerate(partitions):
+            d = os.path.abspath(os.path.join(self.dst, self.name % pn))
+            for fn, size in part.filelist:
+                dst = os.path.join(d, fn)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                os.link(os.path.join(self.srcbase, fn), dst)
+
+class Output7z(OutputBase):
+    def __init__(self, srcbase, dst, name=None, maxsize=None, extargs=None, cmd7z='7za'):
+        self.srcbase = srcbase
+        self.dst = dst
+        self.name = name or '%03d.7z'
+        self.maxsize = maxsize
+        self.extargs = extargs or []
+        self.cmd7z = cmd7z
+
+    def output(self, partitions):
+        parabase = [self.cmd7z, 'a', '-t7z'] + self.extargs
+        for pn, part in enumerate(partitions):
+            d = os.path.abspath(os.path.join(self.dst, self.name % pn))
+            fd, tmpname = tempfile.mkstemp()
+            if self.maxsize and part.size > self.maxsize:
+                para1 = ['-v' + str(maxsize), '--', d, '@' + tmpname]
+            else:
+                para1 = ['--', d, '@' + tmpname]
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    for fn, size in part.filelist:
+                        f.write(fn + '\n')
+                logging.info('Creating archive %s...' % (self.name % pn))
+                proc = subprocess.Popen(parabase + para1, stdout=sys.stdout, stderr=sys.stderr, cwd=self.srcbase)
+                proc.wait()
+            finally:
+                proc.kill()
+                os.remove(tmpname)
+
+class OutputTar(OutputBase):
+    def __init__(self, srcbase, dst, name=None, compression=None):
+        self.srcbase = srcbase
+        self.dst = dst
+        self.ext = 'tar.' + compression if compression else 'tar'
+        self.name = name or '%03d.' + self.ext
+        self.mode = 'w:' + compression if compression else 'w'
+
+    def output(self, partitions):
+        for pn, part in enumerate(partitions):
+            d = os.path.abspath(os.path.join(self.dst, self.name % pn))
+            logging.info('Creating archive %s...' % (self.name % pn))
+            with tarfile.open(d, self.mode) as tar:
+                for fn, size in part.filelist:
+                    tar.add(os.path.join(self.srcbase, fn), fn)
+
+class OutputZip(OutputBase):
+    def __init__(self, srcbase, dst, name=None):
+        self.srcbase = srcbase
+        self.dst = dst
+        self.name = name or '%03d.zip'
+
+    def output(self, partitions):
+        for pn, part in enumerate(partitions):
+            d = os.path.abspath(os.path.join(self.dst, self.name % pn))
+            logging.info('Creating archive %s...' % (self.name % pn))
+            with zipfile.ZipFile(d, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
+                for fn, size in part.filelist:
+                    zipf.write(os.path.join(self.srcbase, fn), fn)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="A flexible file packer with filtering and independent partitioning support.")
+
+    group1 = parser.add_argument_group('Output', 'output control')
+    group1.add_argument("-o", "--output", help="output location", default=".")
+    group1.add_argument("-i", "--index", help="index file", default="index.txt")
+    group1.add_argument("-n", "--name", help="output file/folder name format (Default: %%03d[.ext])")
+    group1.add_argument("-f", "--format", help="output format, can be one of 'none', 'copy', 'link', '7z', 'zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.xz' (Default: 7z)", default="7z")
+    group1.add_argument("--p7z-args", help="extra arguments for 7z (only for -f 7z)")
+    group1.add_argument("--p7z-cmd", help="7z program to use (Default: 7za, only for -f 7z)", default='7za')
+    group1.add_argument("--sort", help="sort file in a partition. 0: no sort, 1: normal sort, 2: 7z-style sort within a directory, 3: 7z-style sort within a partition (only for -f tar.*z)", type=int, choices=(0, 1, 2, 3), default=0)
+
+    group2 = parser.add_argument_group('Filter', 'options for filtering files')
+    group2.add_argument("--maxfilesize", help="max size of each file")
+    group2.add_argument("--minfilesize", help="min size of each file")
+    group2.add_argument("--exclude", help="exclude files that match the glob pattern", action='append')
+    group2.add_argument("--include", help="include files that match the glob pattern", action='append')
+    group2.add_argument("--exclude-re", help="exclude files that match the regex pattern", action='append')
+    group2.add_argument("--include-re", help="include files that match the regex pattern", action='append')
+    group2.add_argument("--after", help="select files whose modification time is after this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20140101120000, use local time zone)")
+    group2.add_argument("--before", help="select files whose modification time is before this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20150601000000, use local time zone)")
+
+    group3 = parser.add_argument_group('Partition', 'partition methods')
+    group3.add_argument("-s", "--maxpartsize", help="max partition size", default=0)
+    group3.add_argument("--maxfilenum", help="max file number per partition", type=int, default=0)
+    group3.add_argument("--maxpart", help="max partition number (overrides: -s, --maxfilenum)", type=int)
+
+    parser.add_argument("PATH", nargs='+', help="Paths to archive")
+    args = parser.parse_args()
+
+    pathlist = args.PATH
+    basedir = basepath(pathlist)
+
+    if args.maxpart:
+        packer = PartNumberLimitPacker(args.maxpart)
+    elif args.maxpartsize or args.maxfilenum:
+        packer = LimitPacker(human2bytes(args.maxpartsize), args.maxfilenum)
+    else:
+        packer = SingleVolumePacker()
+
+    ffilter = TrueFilter()
+    if args.maxfilesize or args.minfilesize:
+        ffilter |= SizeFilter(human2bytes(args.maxfilesize), human2bytes(args.minfilesize))
+    if args.exclude or args.include:
+        ffilter |= GlobFilter(args.exclude, args.include)
+    if args.exclude_re or args.include_re:
+        ffilter |= RegexFilter(args.exclude_re, args.include_re)
+    if args.after or args.before:
+        after = time.mktime(time.strptime(args.after, '%Y%m%d%H%M%S')) if args.after else None
+        before = time.mktime(time.strptime(args.before, '%Y%m%d%H%M%S')) if args.before else None
+        ffilter |= TimeFilter(after, before, 'm')
+
+    compressfunc = None
+    sortfile = 0
+    if args.format == 'none':
+        output = OutputBase(basedir, args.output, args.name)
+    elif args.format == 'copy':
+        output = OutputCopy(basedir, args.output, args.name)
+    elif args.format == 'link':
+        output = OutputLink(basedir, args.output, args.name)
+    elif args.format == '7z':
+        compressfunc = lzma.compress
+        output = Output7z(basedir, args.output, args.name, human2bytes(args.maxpartsize), args.p7z_args, args.p7z_cmd)
+    elif args.format == 'zip':
+        compressfunc = zlib.compress
+        output = OutputZip(basedir, args.output, args.name)
+    elif args.format.startswith('tar'):
+        ext = args.format.split('.')
+        compression = ext[1] if len(ext) == 2 else None
+        if compression == 'gz':
+            compressfunc = zlib.compress
+        elif compression == 'bz2':
+            compressfunc = bz2.compress
+        elif compression == 'xz':
+            compressfunc = lzma.compress
+        elif compression is None:
+            pass
+        else:
+            raise ValueError('unsupported compression method ' + compression)
+        sortfile = args.sort
+        output = OutputTar(basedir, args.output, args.name, compression)
+    else:
+        raise ValueError('unsupported output format ' + args.format)
+
+    vol = Volume(packer, ffilter, os.path.join(args.output, args.index), output, compressfunc, sortfile)
+    vol.run(pathlist, basedir)
+
+if __name__ == '__main__':
+    main()
