@@ -129,6 +129,7 @@ class Volume:
     def partition(self, paths, basedir=None):
         basedir = basedir or basepath(paths)
         filelist, ignored = self.scanpaths(paths, basedir)
+        logging.info("Dispatching files...")
         parts = self.packer.dispatch(filelist)
         for p in parts:
             p.sortfile(self.sortfile)
@@ -182,7 +183,7 @@ class Volume:
             yield '# %s' % p
         yield '# %s Total %s files, %s, %s partitions, %s ignored.' % (time.strftime('%Y-%m-%d %H:%M:%S'), len(filelist), sizeof_fmt(sum(map(_ig1, filelist))), len(partitions), len(ignored))
         for pn, part in enumerate(partitions):
-            for fn, estsize in part.filelist:
+            for fn, size, estsize in part.filelist:
                 yield "%03d\t%s" % (pn, fn)
         if showignored:
             yield "# Ignored files:"
@@ -369,8 +370,8 @@ class Partition:
     def __bool__(self):
         return bool(self.filelist)
 
-    def addfile(self, filename, size):
-        self.filelist.append((filename, size))
+    def addfile(self, filename, origsize, size):
+        self.filelist.append((filename, origsize, size))
         self.size += size
 
     def sortfile(self, level=0):
@@ -404,8 +405,8 @@ class PackerBase:
 class SingleVolumePacker(PackerBase):
     def dispatch(self, filelist):
         part = Partition()
-        for filename, size in filelist:
-            part.addfile(filename, size)
+        for filename, origsize, size in filelist:
+            part.addfile(filename, origsize, size)
         return [part]
 
 class LimitPacker(PackerBase):
@@ -438,7 +439,7 @@ class LimitPacker(PackerBase):
             pn = startp = 0
         for filename, origsize, size in filelist:
             if 0 < maxsize < size:
-                partitions[0].addfile(filename, size)
+                partitions[0].addfile(filename, origsize, size)
             else:
                 # examine each partition
                 while pn < len(partitions):
@@ -451,7 +452,7 @@ class LimitPacker(PackerBase):
                         pn += 1
                     else:
                         # file fits in current partition, add it
-                        partitions[pn].addfile(filename, size)
+                        partitions[pn].addfile(filename, origsize, size)
                         # examine next file
                         break
             # examine next file
@@ -475,7 +476,7 @@ class PartNumberLimitPacker(PackerBase):
                 # find most approriate partition
                 part = min(partitions, key=_psize)
                 # assign it and load the partition with file size
-                part.addfile(filename, size)
+                part.addfile(filename, origsize, size)
             else:
                 emptyfiles.append(filename)
         # re-dispatch empty files
@@ -483,12 +484,10 @@ class PartNumberLimitPacker(PackerBase):
         n = 0
         for part in partitions:
             for i in range(fpp):
-                filename, origsize, size = filelist[n]
-                part.addfile(filename, size)
+                part.addfile(*filelist[n])
                 n += 1
         for i in range(rem):
-            filename, origsize, size = filelist[n]
-            part.addfile(filename, size)
+            part.addfile(*filelist[n])
             n += 1
         assert n == len(filelist)
         return partitions
@@ -506,7 +505,7 @@ class OutputCopy(OutputBase):
     def output(self, partitions):
         for pn, part in enumerate(partitions):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
-            for fn, size in part.filelist:
+            for fn, size, estsize in part.filelist:
                 dst = os.path.join(d, fn)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy2(os.path.join(self.srcbase, fn), dst)
@@ -515,7 +514,7 @@ class OutputLink(OutputBase):
     def output(self, partitions):
         for pn, part in enumerate(partitions):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
-            for fn, size in part.filelist:
+            for fn, size, estsize in part.filelist:
                 dst = os.path.join(d, fn)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 os.link(os.path.join(self.srcbase, fn), dst)
@@ -540,13 +539,16 @@ class Output7z(OutputBase):
                 para1 = ['--', d, '@' + tmpname]
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                    for fn, size in part.filelist:
+                    for fn, size, estsize in part.filelist:
                         f.write(fn + '\n')
                 logging.info('Creating archive %s...' % (self.name % pn))
                 proc = subprocess.Popen(parabase + para1, stdout=sys.stdout, stderr=sys.stderr, cwd=self.srcbase)
                 proc.wait()
             finally:
-                proc.kill()
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
                 os.remove(tmpname)
 
 class OutputTar(OutputBase):
@@ -562,7 +564,7 @@ class OutputTar(OutputBase):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
             logging.info('Creating archive %s...' % (self.name % pn))
             with tarfile.open(d, self.mode) as tar:
-                for fn, size in part.filelist:
+                for fn, size, estsize in part.filelist:
                     tar.add(os.path.join(self.srcbase, fn), fn)
 
 class OutputZip(OutputBase):
@@ -576,7 +578,7 @@ class OutputZip(OutputBase):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
             logging.info('Creating archive %s...' % (self.name % pn))
             with zipfile.ZipFile(d, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
-                for fn, size in part.filelist:
+                for fn, size, estsize in part.filelist:
                     zipf.write(os.path.join(self.srcbase, fn), fn)
 
 
