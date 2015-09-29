@@ -8,6 +8,7 @@ import bz2
 import zlib
 import lzma
 import time
+import shlex
 import shutil
 import fnmatch
 import logging
@@ -125,6 +126,7 @@ class Volume:
 
     def run(self, paths, basedir=None):
         self.output.output(self.partition(paths, basedir=None))
+        logging.info("Done.")
 
     def partition(self, paths, basedir=None):
         basedir = basedir or basepath(paths)
@@ -478,18 +480,18 @@ class PartNumberLimitPacker(PackerBase):
                 # assign it and load the partition with file size
                 part.addfile(filename, origsize, size)
             else:
-                emptyfiles.append(filename)
+                emptyfiles.append((filename, origsize, size))
         # re-dispatch empty files
-        fpp, rem = divmod(len(filelist), len(partitions))
+        fpp, rem = divmod(len(emptyfiles), len(partitions))
         n = 0
         for part in partitions:
             for i in range(fpp):
-                part.addfile(*filelist[n])
+                part.addfile(*emptyfiles[n])
                 n += 1
         for i in range(rem):
-            part.addfile(*filelist[n])
+            part.addfile(*emptyfiles[n])
             n += 1
-        assert n == len(filelist)
+        assert n == len(emptyfiles)
         return partitions
 
 class OutputBase:
@@ -505,13 +507,18 @@ class OutputCopy(OutputBase):
     def output(self, partitions):
         for pn, part in enumerate(partitions):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
+            logging.info('Copying to %s' % d)
+            eta = ETA(part.size, min_ms_between_updates=500)
             for fn, size, estsize in part.filelist:
                 dst = os.path.join(d, fn)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy2(os.path.join(self.srcbase, fn), dst)
+                eta.print_status(estsize)
+            eta.done()
 
 class OutputLink(OutputBase):
     def output(self, partitions):
+        logging.info('Linking...')
         for pn, part in enumerate(partitions):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
             for fn, size, estsize in part.filelist:
@@ -534,9 +541,14 @@ class Output7z(OutputBase):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
             fd, tmpname = tempfile.mkstemp()
             if self.maxsize and part.size > self.maxsize:
-                para1 = ['-v' + str(maxsize), '--', d, '@' + tmpname]
+                para1 = ['-v' + str(self.maxsize), '--', d, '@' + tmpname]
+                cfiles = ['%s.%03d' % (d, i) for i in range(1, int(part.size/self.maxsize)+2)]
             else:
                 para1 = ['--', d, '@' + tmpname]
+                cfiles = [d]
+            print(cfiles)
+            if os.path.isfile(cfiles[0]):
+                logging.warning('Archive already exists: ' + d)
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     for fn, size, estsize in part.filelist:
@@ -544,11 +556,15 @@ class Output7z(OutputBase):
                 logging.info('Creating archive %s...' % (self.name % pn))
                 proc = subprocess.Popen(parabase + para1, stdout=sys.stdout, stderr=sys.stderr, cwd=self.srcbase)
                 proc.wait()
+            except KeyboardInterrupt:
+                proc.terminate()
+                for fn in cfiles:
+                    try:
+                        os.remove(fn)
+                    except FileNotFoundError:
+                        pass
+                raise
             finally:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
                 os.remove(tmpname)
 
 class OutputTar(OutputBase):
@@ -562,6 +578,8 @@ class OutputTar(OutputBase):
     def output(self, partitions):
         for pn, part in enumerate(partitions):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
+            if os.path.isfile(d):
+                logging.warning('Archive already exists, overwriting: ' + d)
             logging.info('Creating archive %s...' % (self.name % pn))
             with tarfile.open(d, self.mode) as tar:
                 for fn, size, estsize in part.filelist:
@@ -576,6 +594,8 @@ class OutputZip(OutputBase):
     def output(self, partitions):
         for pn, part in enumerate(partitions):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
+            if os.path.isfile(d):
+                logging.warning('Archive already exists, overwriting: ' + d)
             logging.info('Creating archive %s...' % (self.name % pn))
             with zipfile.ZipFile(d, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
                 for fn, size, estsize in part.filelist:
@@ -590,24 +610,24 @@ def main():
     group1.add_argument("-i", "--index", help="index file", default="index.txt")
     group1.add_argument("-n", "--name", help="output file/folder name format (Default: %%03d[.ext])")
     group1.add_argument("-f", "--format", help="output format, can be one of 'none', 'copy', 'link', '7z', 'zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.xz' (Default: 7z)", default="7z")
-    group1.add_argument("--p7z-args", help="extra arguments for 7z (only for -f 7z)")
+    group1.add_argument("--p7z-args", help="extra arguments for 7z (only for -f 7z) (TIP: use --p7z-args='-xxx' to avoid confusing the argument parser)")
     group1.add_argument("--p7z-cmd", help="7z program to use (Default: 7za, only for -f 7z)", default='7za')
-    group1.add_argument("--sort", help="sort file in a partition. 0: no sort, 1: normal sort, 2: 7z-style sort within a directory, 3: 7z-style sort within a partition (only for -f tar.*z)", type=int, choices=(0, 1, 2, 3), default=0)
+    group1.add_argument("--tar-sort", help="sort file in a partition (only for -f tar.*z). 0: no sort, 1: normal sort, 2(default): 7z-style sort within a directory, 3: 7z-style sort within a partition.", type=int, choices=(0, 1, 2, 3), default=2)
 
     group2 = parser.add_argument_group('Filter', 'options for filtering files')
     group2.add_argument("--maxfilesize", help="max size of each file")
-    group2.add_argument("--minfilesize", help="min size of each file")
+    group2.add_argument("-m", "--minfilesize", help="min size of each file")
     group2.add_argument("--exclude", help="exclude files that match the glob pattern", action='append')
     group2.add_argument("--include", help="include files that match the glob pattern", action='append')
     group2.add_argument("--exclude-re", help="exclude files that match the regex pattern", action='append')
     group2.add_argument("--include-re", help="include files that match the regex pattern", action='append')
-    group2.add_argument("--after", help="select files whose modification time is after this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20140101120000, use local time zone)")
-    group2.add_argument("--before", help="select files whose modification time is before this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20150601000000, use local time zone)")
+    group2.add_argument("-a", "--after", help="select files whose modification time is after this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20140101120000, use local time zone)")
+    group2.add_argument("-b", "--before", help="select files whose modification time is before this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20150601000000, use local time zone)")
 
     group3 = parser.add_argument_group('Partition', 'partition methods')
     group3.add_argument("-s", "--maxpartsize", help="max partition size", default=0)
     group3.add_argument("--maxfilenum", help="max file number per partition", type=int, default=0)
-    group3.add_argument("--maxpart", help="max partition number (overrides: -s, --maxfilenum)", type=int)
+    group3.add_argument("-p", "--part", help="partition number (overrides: -s, --maxfilenum)", type=int)
 
     parser.add_argument("PATH", nargs='+', help="Paths to archive")
     args = parser.parse_args()
@@ -615,8 +635,8 @@ def main():
     pathlist = args.PATH
     basedir = basepath(pathlist)
 
-    if args.maxpart:
-        packer = PartNumberLimitPacker(args.maxpart)
+    if args.part:
+        packer = PartNumberLimitPacker(args.part)
     elif args.maxpartsize or args.maxfilenum:
         packer = LimitPacker(human2bytes(args.maxpartsize), args.maxfilenum)
     else:
@@ -644,7 +664,7 @@ def main():
         output = OutputLink(basedir, args.output, args.name)
     elif args.format == '7z':
         compressfunc = lzma.compress
-        output = Output7z(basedir, args.output, args.name, human2bytes(args.maxpartsize), args.p7z_args, args.p7z_cmd)
+        output = Output7z(basedir, args.output, args.name, human2bytes(args.maxpartsize), shlex.split(args.p7z_args), args.p7z_cmd)
     elif args.format == 'zip':
         compressfunc = zlib.compress
         output = OutputZip(basedir, args.output, args.name)
@@ -661,7 +681,7 @@ def main():
             pass
         else:
             raise ValueError('unsupported compression method ' + compression)
-        sortfile = args.sort
+        sortfile = args.tar_sort
         output = OutputTar(basedir, args.output, args.name, compression)
     else:
         raise ValueError('unsupported output format ' + args.format)
