@@ -1,30 +1,87 @@
 Maxpacker
 =========
 
-Pack files into independent compressed volumes by predicting compressed size of files.
+A flexible backup tool.
 
-Using fpart's algorithm to allocate files.
+Features
+---------
 
-It only supports 7z now, but it can be improved to support zip, tar.*z, etc. There isn't a Python 7z library for writing, so the compressed data in predicting is not efficiently used.
+* Filter files by file name, modification time and size
+* Pack files into independent partitions by size or number of files or partitions using the algorithms from [fpart](https://github.com/martymac/fpart)
+* Backup the splitted partitions with copy/link/7z/zip/tar.*z
+* Predict the final compressed file size and pack efficiently
 
 Usage
 -----
 
 ```
-usage: maxpacker.py [-h] [-s MAXSIZE] [-n] [-o PREFIX] FOLDER
+usage: maxpacker.py [-h] [-o OUTPUT] [-i INDEX] [-n NAME] [-f FORMAT]
+                    [--p7z-args P7Z_ARGS] [--p7z-cmd P7Z_CMD]
+                    [--tar-sort {0,1,2,3}] [--maxfilesize MAXFILESIZE]
+                    [-m MINFILESIZE] [--exclude EXCLUDE] [--include INCLUDE]
+                    [--exclude-re EXCLUDE_RE] [--include-re INCLUDE_RE]
+                    [-a AFTER] [-b BEFORE] [-s MAXPARTSIZE]
+                    [--maxfilenum MAXFILENUM] [-p PART]
+                    PATH [PATH ...]
 
-Independent compressed volumes maxium packer.
+A flexible backup tool.
 
 positional arguments:
-  FOLDER                Folder to archive
+  PATH                  Paths to archive
 
 optional arguments:
   -h, --help            show this help message and exit
-  -s MAXSIZE, --maxsize MAXSIZE
-                        max volume size
-  -n, --dry-run         only allocate files
-  -o PREFIX, --prefix PREFIX
-                        output files prefix
+
+Output:
+  output control
+
+  -o OUTPUT, --output OUTPUT
+                        output location
+  -i INDEX, --index INDEX
+                        index file
+  -n NAME, --name NAME  output file/folder name format (Default: %03d[.ext])
+  -f FORMAT, --format FORMAT
+                        output format, can be one of 'none', 'copy', 'link',
+                        '7z', 'zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.xz'
+                        (Default: 7z)
+  --p7z-args P7Z_ARGS   extra arguments for 7z (only for -f 7z) (TIP: use
+                        --p7z-args='-xxx' to avoid confusing the argument
+                        parser)
+  --p7z-cmd P7Z_CMD     7z program to use (Default: 7za, only for -f 7z)
+  --tar-sort {0,1,2,3}  sort file in a partition (only for -f tar.*z). 0: no
+                        sort, 1: normal sort, 2(default): 7z-style sort within
+                        a directory, 3: 7z-style sort within a partition.
+
+Filter:
+  options for filtering files
+
+  --maxfilesize MAXFILESIZE
+                        max size of each file
+  -m MINFILESIZE, --minfilesize MINFILESIZE
+                        min size of each file
+  --exclude EXCLUDE     exclude files that match the glob pattern
+  --include INCLUDE     include files that match the glob pattern
+  --exclude-re EXCLUDE_RE
+                        exclude files that match the regex pattern
+  --include-re INCLUDE_RE
+                        include files that match the regex pattern
+  -a AFTER, --after AFTER
+                        select files whose modification time is after this
+                        value (Format: %Y%m%d%H%M%S, eg. 20140101120000, use
+                        local time zone)
+  -b BEFORE, --before BEFORE
+                        select files whose modification time is before this
+                        value (Format: %Y%m%d%H%M%S, eg. 20150601000000, use
+                        local time zone)
+
+Partition:
+  partition methods
+
+  -s MAXPARTSIZE, --maxpartsize MAXPARTSIZE
+                        max partition size
+  --maxfilenum MAXFILENUM
+                        max file number per partition
+  -p PART, --part PART  partition number (overrides: -s, --maxfilenum)
 ```
 
 License

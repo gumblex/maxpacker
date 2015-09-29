@@ -603,7 +603,7 @@ class OutputZip(OutputBase):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="A flexible file packer with filtering and independent partitioning support.")
+    parser = argparse.ArgumentParser(description="A flexible backup tool.")
 
     group1 = parser.add_argument_group('Output', 'output control')
     group1.add_argument("-o", "--output", help="output location", default=".")
@@ -664,7 +664,7 @@ def main():
         output = OutputLink(basedir, args.output, args.name)
     elif args.format == '7z':
         compressfunc = lzma.compress
-        output = Output7z(basedir, args.output, args.name, human2bytes(args.maxpartsize), shlex.split(args.p7z_args), args.p7z_cmd)
+        output = Output7z(basedir, args.output, args.name, human2bytes(args.maxpartsize), shlex.split(args.p7z_args or ''), args.p7z_cmd)
     elif args.format == 'zip':
         compressfunc = zlib.compress
         output = OutputZip(basedir, args.output, args.name)
