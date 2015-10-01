@@ -359,10 +359,10 @@ class RsyncFilter(Filter):
 
         # Pattern should match till the end.
         pattern = pattern + "$"
-        return re.compile(pattern)
+        return re.compile(pattern, re.S)
 
     def match(self, pattern, filename):
-        return pattern.search("/" + os.path.normcase(filename).replace(os.sep, "/").lstrip("/"), re.M | re.S)
+        return pattern.search("/" + os.path.normcase(filename).replace(os.sep, "/").lstrip("/"))
 
 class SizeFilter(Filter):
     '''
