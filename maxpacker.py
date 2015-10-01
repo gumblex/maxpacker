@@ -163,7 +163,7 @@ class Volume:
                             if self.ffilter(relfn):
                                 fl.append((relfn, os.path.getsize(fn), os.path.getsize(fn)))
                             else:
-                                ignored.append(fn)
+                                ignored.append(relfn)
                         except Exception as ex:
                             logging.error(ex)
                     for name in dirs:
