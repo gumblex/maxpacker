@@ -158,9 +158,10 @@ class Volume:
                 for root, dirs, files in os.walk(path):
                     for name in files:
                         fn = os.path.join(root, name)
+                        relfn = os.path.relpath(fn, prefix)
                         try:
-                            if self.ffilter(fn):
-                                fl.append((os.path.relpath(fn, prefix), os.path.getsize(fn), os.path.getsize(fn)))
+                            if self.ffilter(relfn):
+                                fl.append((relfn, os.path.getsize(fn), os.path.getsize(fn)))
                             else:
                                 ignored.append(fn)
                         except Exception as ex:
