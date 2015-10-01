@@ -153,7 +153,7 @@ class Volume:
                     else:
                         ignored.append(path)
                 except Exception as ex:
-                    logging.exception("Can't access " + path)
+                    logging.error(ex)
             else:
                 for root, dirs, files in os.walk(path):
                     for name in files:
@@ -164,7 +164,12 @@ class Volume:
                             else:
                                 ignored.append(fn)
                         except Exception as ex:
-                            logging.exception("Can't access " + fn)
+                            logging.error(ex)
+                    for name in dirs:
+                        fn = os.path.join(root, name)
+                        # not ignoring empty dirs
+                        if not os.listdir(fn):
+                            fl.append((os.path.relpath(fn + '/', prefix), 0, 0))
         # estimate compressd size
         if callable(self.compressfunc):
             logging.info("Calculating estimated compressed size...")
@@ -271,7 +276,7 @@ class GlobFilter(Filter):
     '''
 
     def __init__(self, exclude=(), include=()):
-        self.exclude = exclude
+        self.exclude = exclude or ()
         self.include = include or ('*',)
 
     def __call__(self, filename):
@@ -288,13 +293,76 @@ class RegexFilter(Filter):
     '''
 
     def __init__(self, exclude=(), include=()):
-        self.exclude = tuple(re.compile(r) for r in exclude)
-        self.include = tuple(re.compile(r) for r in include or ('',))
+        self.exclude = tuple(re.compile(r) for r in (exclude or ()))
+        self.include = tuple(re.compile(r) for r in (include or ('',)))
 
     def __call__(self, filename):
         return (
             any(pat.match(filename) for pat in self.include) and not
             any(pat.match(filename) for pat in self.exclude))
+
+class RsyncFilter(Filter):
+    '''
+    Select files matching with regex patterns.
+    Note that it uses `match` not `search`.
+    `include` and `exclude` must be two lists of patterns.
+    An empty list means include all.
+    '''
+
+    def __init__(self, exclude=(), include=()):
+        self.exclude = tuple(map(self.translate, exclude or ()))
+        self.include = tuple(map(self.translate, include or ('',)))
+
+    def __call__(self, filename):
+        return (
+            any(self.match(pat, filename) for pat in self.include) and not
+            any(self.match(pat, filename) for pat in self.exclude))
+
+    def translate(self, pattern):
+        """Convert a rsync pattern that match against a path to a filter that match against a converted path."""
+
+        if not pattern:
+            return re.compile('')
+
+        # Express windows, mac patterns in unix patterns.
+        pattern = os.path.normcase(pattern).replace(os.sep, "/")
+
+        # If pattern contains '/' it should match from the start.
+        temp = pattern
+        if pattern[0] == "/":
+            pattern = pattern[1:]
+        if temp[-1] == "/":
+            temp = temp[:-1]
+
+        # Convert pattern rules: ** * ? to regexp rules.
+        pattern = re.escape(pattern)
+        pattern = pattern.replace("\\?", "[^/]")
+        pattern = pattern.replace("\\*\\*", ".*")
+        pattern = pattern.replace("\\*", "[^/]*")
+        pattern = pattern.replace("\\*", ".*")
+
+        if "/" in temp:
+            # If pattern contains '/' it should match from the start.
+            pattern = "^\\/" + pattern
+        else:
+            # Else the pattern should match the all file or folder name.
+            pattern = "\\/" + pattern
+
+        if pattern[-2:] == "\\/":
+            # Folder patterns should match also files (MP specific).
+            pattern = pattern + ".*"
+
+        # (MP: not used because it is file-based)
+        #if pattern[-2:] != "\\/" and pattern[-2:] != ".*":
+            # File patterns should match also folders.
+            #pattern = pattern + "\\/?"
+
+        # Pattern should match till the end.
+        pattern = pattern + "$"
+        return re.compile(pattern)
+
+    def match(self, pattern, filename):
+        return pattern.search("/" + os.path.normcase(filename).replace(os.sep, "/").lstrip("/"), re.M | re.S)
 
 class SizeFilter(Filter):
     '''
@@ -510,9 +578,17 @@ class OutputCopy(OutputBase):
             logging.info('Copying to %s' % d)
             eta = ETA(part.size, min_ms_between_updates=500)
             for fn, size, estsize in part.filelist:
+                src = os.path.join(self.srcbase, fn)
                 dst = os.path.join(d, fn)
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(os.path.join(self.srcbase, fn), dst)
+                try:
+                    if os.path.isdir(src):
+                        os.makedirs(dst, exist_ok=True)
+                    else:
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        shutil.copy2(src, dst)
+                except Exception as ex:
+                    logging.error(ex)
+                    continue
                 eta.print_status(estsize)
             eta.done()
 
@@ -522,9 +598,17 @@ class OutputLink(OutputBase):
         for pn, part in enumerate(partitions):
             d = os.path.abspath(os.path.join(self.dst, self.name % pn))
             for fn, size, estsize in part.filelist:
+                src = os.path.join(self.srcbase, fn)
                 dst = os.path.join(d, fn)
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                os.link(os.path.join(self.srcbase, fn), dst)
+                try:
+                    if os.path.isdir(src):
+                        os.makedirs(dst, exist_ok=True)
+                    else:
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        os.link(os.path.join(self.srcbase, fn), dst)
+                except Exception as ex:
+                    logging.error(ex)
+                    continue
 
 class Output7z(OutputBase):
     def __init__(self, srcbase, dst, name=None, maxsize=None, extargs=None, cmd7z='7za'):
@@ -546,7 +630,6 @@ class Output7z(OutputBase):
             else:
                 para1 = ['--', d, '@' + tmpname]
                 cfiles = [d]
-            print(cfiles)
             if os.path.isfile(cfiles[0]):
                 logging.warning('Archive already exists: ' + d)
             try:
@@ -581,9 +664,15 @@ class OutputTar(OutputBase):
             if os.path.isfile(d):
                 logging.warning('Archive already exists, overwriting: ' + d)
             logging.info('Creating archive %s...' % (self.name % pn))
+            eta = ETA(part.size, min_ms_between_updates=500)
             with tarfile.open(d, self.mode) as tar:
                 for fn, size, estsize in part.filelist:
-                    tar.add(os.path.join(self.srcbase, fn), fn)
+                    try:
+                        tar.add(os.path.join(self.srcbase, fn), fn)
+                    except Exception as ex:
+                        logging.error(ex)
+                    eta.print_status(estsize)
+            eta.done()
 
 class OutputZip(OutputBase):
     def __init__(self, srcbase, dst, name=None):
@@ -597,10 +686,15 @@ class OutputZip(OutputBase):
             if os.path.isfile(d):
                 logging.warning('Archive already exists, overwriting: ' + d)
             logging.info('Creating archive %s...' % (self.name % pn))
+            eta = ETA(part.size, min_ms_between_updates=500)
             with zipfile.ZipFile(d, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
                 for fn, size, estsize in part.filelist:
-                    zipf.write(os.path.join(self.srcbase, fn), fn)
-
+                    try:
+                        zipf.write(os.path.join(self.srcbase, fn), fn)
+                    except Exception as ex:
+                        logging.error(ex)
+                    eta.print_status(estsize)
+            eta.done()
 
 def main():
     parser = argparse.ArgumentParser(description="A flexible backup tool.")
@@ -617,8 +711,8 @@ def main():
     group2 = parser.add_argument_group('Filter', 'options for filtering files')
     group2.add_argument("--maxfilesize", help="max size of each file")
     group2.add_argument("-m", "--minfilesize", help="min size of each file")
-    group2.add_argument("--exclude", help="exclude files that match the glob pattern", action='append')
-    group2.add_argument("--include", help="include files that match the glob pattern", action='append')
+    group2.add_argument("-e", "--exclude", help="exclude files that match the rsync-style pattern", action='append')
+    group2.add_argument("--include", help="include files that match the rsync-style pattern", action='append')
     group2.add_argument("--exclude-re", help="exclude files that match the regex pattern", action='append')
     group2.add_argument("--include-re", help="include files that match the regex pattern", action='append')
     group2.add_argument("-a", "--after", help="select files whose modification time is after this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20140101120000, use local time zone)")
@@ -646,7 +740,7 @@ def main():
     if args.maxfilesize or args.minfilesize:
         ffilter |= SizeFilter(human2bytes(args.maxfilesize), human2bytes(args.minfilesize))
     if args.exclude or args.include:
-        ffilter |= GlobFilter(args.exclude, args.include)
+        ffilter |= RsyncFilter(args.exclude, args.include)
     if args.exclude_re or args.include_re:
         ffilter |= RegexFilter(args.exclude_re, args.include_re)
     if args.after or args.before:
