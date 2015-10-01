@@ -163,9 +163,11 @@ class Volume:
                             if self.ffilter(relfn):
                                 fl.append((relfn, os.path.getsize(fn), os.path.getsize(fn)))
                             else:
-                                ignored.append(relfn)
+                                ignored.append((relfn, os.path.getsize(fn)))
                         except Exception as ex:
                             logging.error(ex)
+                            # file access error -> ignore
+                            ignored.append((relfn, 0))
                     for name in dirs:
                         fn = os.path.join(root, name)
                         # not ignoring empty dirs
@@ -187,15 +189,16 @@ class Volume:
         return fl, ignored
 
     def genindex(self, filelist, paths, ignored, partitions, showignored=True):
+        yield '# '+ time.strftime('%Y-%m-%d %H:%M:%S %Z')
+        yield '# Total %s files, %s, %s partitions. %s files, %s ignored.' % (len(filelist), sizeof_fmt(sum(map(_ig1, filelist))), len(partitions), len(ignored), sizeof_fmt(sum(map(_ig1, ignored))))
         for p in paths:
             yield '# %s' % p
-        yield '# %s Total %s files, %s, %s partitions, %s ignored.' % (time.strftime('%Y-%m-%d %H:%M:%S'), len(filelist), sizeof_fmt(sum(map(_ig1, filelist))), len(partitions), len(ignored))
         for pn, part in enumerate(partitions):
             for fn, size, estsize in part.filelist:
                 yield "%03d\t%s" % (pn, fn)
         if showignored:
             yield "# Ignored files:"
-            for fn in ignored:
+            for fn, size in ignored:
                 yield "#\t" + fn
 
     def estcompresssize(self, filename, fsize, err=0.1):
