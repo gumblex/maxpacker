@@ -122,6 +122,7 @@ class Volume:
         self.output = output or OutputBase()
         self.compressfunc = compressfunc
         self.sortfile = sortfile
+        self.totalsizelim = None
         self.samplesize = 1024
 
     def run(self, paths, basedir=None):
@@ -187,6 +188,22 @@ class Volume:
                     logging.exception("Can't access " + path)
                 eta.print_status()
             eta.done()
+        if self.totalsizelim:
+            filtered = []
+            sizesum = 0
+            maxfilesize = 0
+            for k, v in sorted(enumerate(fl), key=lambda x: x[1][2]):
+                filename, origsize, size = v
+                if sizesum + size > self.totalsizelim:
+                    ignored.append(fl[k][:2])
+                    if not maxfilesize:
+                        maxfilesize = origsize
+                else:
+                    filtered.append(fl[k])
+                    sizesum += size
+            fl = filtered
+            if maxfilesize:
+                logging.info("Max file size is " + sizeof_fmt(maxfilesize))
         return fl, ignored
 
     def genindex(self, filelist, paths, ignored, partitions, showignored=True):
@@ -715,6 +732,7 @@ def main():
     group1.add_argument("--tar-sort", help="sort file in a partition (only for -f tar.*z). 0: no sort, 1: normal sort, 2(default): 7z-style sort within a directory, 3: 7z-style sort within a partition.", type=int, choices=(0, 1, 2, 3), default=2)
 
     group2 = parser.add_argument_group('Filter', 'options for filtering files')
+    group2.add_argument("--totalsize", help="total size limit")
     group2.add_argument("-m", "--maxfilesize", help="max size of each file")
     group2.add_argument("--minfilesize", help="min size of each file")
     group2.add_argument("-e", "--exclude", help="exclude files that match the rsync-style pattern", action='append')
@@ -787,6 +805,10 @@ def main():
         raise ValueError('unsupported output format ' + args.format)
 
     vol = Volume(packer, ffilter, os.path.join(args.output, args.index), output, compressfunc, sortfile)
+
+    if args.totalsize:
+        vol.totalsizelim = human2bytes(args.totalsize)
+
     vol.run(pathlist, basedir)
 
 if __name__ == '__main__':
