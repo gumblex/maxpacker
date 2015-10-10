@@ -17,11 +17,11 @@ Usage
 ```
 usage: maxpacker.py [-h] [-o OUTPUT] [-i INDEX] [-n NAME] [-f FORMAT]
                     [--p7z-args P7Z_ARGS] [--p7z-cmd P7Z_CMD]
-                    [--tar-sort {0,1,2,3}] [--maxfilesize MAXFILESIZE]
-                    [-m MINFILESIZE] [-e EXCLUDE] [--include INCLUDE]
-                    [--exclude-re EXCLUDE_RE] [--include-re INCLUDE_RE]
-                    [-a AFTER] [-b BEFORE] [-s MAXPARTSIZE]
-                    [--maxfilenum MAXFILENUM] [-p PART]
+                    [--tar-sort {0,1,2,3}] [-m MAXFILESIZE]
+                    [--minfilesize MINFILESIZE] [-e EXCLUDE]
+                    [--include INCLUDE] [--exclude-re EXCLUDE_RE]
+                    [--include-re INCLUDE_RE] [-a AFTER] [-b BEFORE]
+                    [-s MAXPARTSIZE] [--maxfilenum MAXFILENUM] [-p PART]
                     PATH [PATH ...]
 
 A flexible backup tool.
@@ -55,9 +55,9 @@ Output:
 Filter:
   options for filtering files
 
-  --maxfilesize MAXFILESIZE
+  -m MAXFILESIZE, --maxfilesize MAXFILESIZE
                         max size of each file
-  -m MINFILESIZE, --minfilesize MINFILESIZE
+  --minfilesize MINFILESIZE
                         min size of each file
   -e EXCLUDE, --exclude EXCLUDE
                         exclude files that match the rsync-style pattern

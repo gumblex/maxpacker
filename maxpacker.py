@@ -713,8 +713,8 @@ def main():
     group1.add_argument("--tar-sort", help="sort file in a partition (only for -f tar.*z). 0: no sort, 1: normal sort, 2(default): 7z-style sort within a directory, 3: 7z-style sort within a partition.", type=int, choices=(0, 1, 2, 3), default=2)
 
     group2 = parser.add_argument_group('Filter', 'options for filtering files')
-    group2.add_argument("--maxfilesize", help="max size of each file")
-    group2.add_argument("-m", "--minfilesize", help="min size of each file")
+    group2.add_argument("-m", "--maxfilesize", help="max size of each file")
+    group2.add_argument("--minfilesize", help="min size of each file")
     group2.add_argument("-e", "--exclude", help="exclude files that match the rsync-style pattern", action='append')
     group2.add_argument("--include", help="include files that match the rsync-style pattern", action='append')
     group2.add_argument("--exclude-re", help="exclude files that match the regex pattern", action='append')
