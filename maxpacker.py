@@ -148,7 +148,7 @@ class Volume:
         for path in paths:
             if os.path.isfile(path):
                 try:
-                    relfn = os.path.relpath(fn, prefix)
+                    relfn = os.path.relpath(path, prefix)
                     if self.ffilter(relfn, prefix):
                         fl.append((os.path.relpath(path, prefix), os.path.getsize(path), os.path.getsize(path)))
                     else:
