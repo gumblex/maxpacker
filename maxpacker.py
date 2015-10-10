@@ -380,7 +380,7 @@ class SizeFilter(Filter):
         self.minsize = minsize
 
     def __call__(self, filename, prefix):
-        filesize = os.path.getsize(os.path.join(filename, prefix))
+        filesize = os.path.getsize(os.path.join(prefix, filename))
         return ((self.maxsize is None or filesize <= self.maxsize)
             and (self.minsize is None or filesize >= self.minsize))
 
@@ -408,7 +408,7 @@ class TimeFilter(Filter):
             raise ValueError("`timetype` must be one of 'm', 'c', 'a'")
 
     def __call__(self, filename, prefix):
-        filetime = self.gettime(os.path.join(filename, prefix))
+        filetime = self.gettime(os.path.join(prefix, filename))
         return ((self.mintime is None or filetime >= self.mintime)
             and (self.maxtime is None or filetime <= self.maxtime))
 
