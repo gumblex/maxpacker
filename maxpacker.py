@@ -148,7 +148,8 @@ class Volume:
         for path in paths:
             if os.path.isfile(path):
                 try:
-                    if self.ffilter(path):
+                    relfn = os.path.relpath(fn, prefix)
+                    if self.ffilter(relfn, prefix):
                         fl.append((os.path.relpath(path, prefix), os.path.getsize(path), os.path.getsize(path)))
                     else:
                         ignored.append(path)
@@ -160,7 +161,7 @@ class Volume:
                         fn = os.path.join(root, name)
                         relfn = os.path.relpath(fn, prefix)
                         try:
-                            if self.ffilter(relfn):
+                            if self.ffilter(relfn, prefix):
                                 fl.append((relfn, os.path.getsize(fn), os.path.getsize(fn)))
                             else:
                                 ignored.append((relfn, os.path.getsize(fn)))
@@ -249,11 +250,11 @@ class CompositeFilter(Filter):
         return "%s(%s)" % (self.__class__.__name__,
                            ", ".join(repr(item) for item in self.items))
 
-    def __call__(self, filename):
+    def __call__(self, filename, prefix):
         items = self.items
-        gen = items[0](filename)
+        gen = items[0](filename, prefix)
         for item in items[1:]:
-            gen = gen and item(filename)
+            gen = gen and item(filename, prefix)
         return gen
 
     def __getitem__(self, item):
@@ -269,7 +270,7 @@ class TrueFilter(Filter):
     '''
     Always returns True.
     '''
-    def __call__(self, filename):
+    def __call__(self, filename, prefix):
         return True
 
 class GlobFilter(Filter):
@@ -283,7 +284,7 @@ class GlobFilter(Filter):
         self.exclude = exclude or ()
         self.include = include or ('*',)
 
-    def __call__(self, filename):
+    def __call__(self, filename, prefix):
         return (
             any(fnmatch.fnmatch(filename, pat) for pat in self.include) and not
             any(fnmatch.fnmatch(filename, pat) for pat in self.exclude))
@@ -300,7 +301,7 @@ class RegexFilter(Filter):
         self.exclude = tuple(re.compile(r) for r in (exclude or ()))
         self.include = tuple(re.compile(r) for r in (include or ('',)))
 
-    def __call__(self, filename):
+    def __call__(self, filename, prefix):
         return (
             any(pat.match(filename) for pat in self.include) and not
             any(pat.match(filename) for pat in self.exclude))
@@ -317,7 +318,7 @@ class RsyncFilter(Filter):
         self.exclude = tuple(map(self.translate, exclude or ()))
         self.include = tuple(map(self.translate, include or ('',)))
 
-    def __call__(self, filename):
+    def __call__(self, filename, prefix):
         return (
             any(self.match(pat, filename) for pat in self.include) and not
             any(self.match(pat, filename) for pat in self.exclude))
@@ -378,8 +379,8 @@ class SizeFilter(Filter):
         self.maxsize = maxsize
         self.minsize = minsize
 
-    def __call__(self, filename):
-        filesize = os.path.getsize(filename)
+    def __call__(self, filename, prefix):
+        filesize = os.path.getsize(os.path.join(filename, prefix))
         return ((self.maxsize is None or filesize <= self.maxsize)
             and (self.minsize is None or filesize >= self.minsize))
 
@@ -406,9 +407,10 @@ class TimeFilter(Filter):
         else:
             raise ValueError("`timetype` must be one of 'm', 'c', 'a'")
 
-    def __call__(self, filename):
-        return ((self.mintime is None or self.gettime(filename) >= self.mintime)
-            and (self.maxtime is None or self.gettime(filename) <= self.maxtime))
+    def __call__(self, filename, prefix):
+        filetime = self.gettime(os.path.join(filename, prefix))
+        return ((self.mintime is None or filetime >= self.mintime)
+            and (self.maxtime is None or filetime <= self.maxtime))
 
 # Packing methods
 
