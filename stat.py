@@ -14,7 +14,7 @@ def timestring(seconds):
     m, s = divmod(seconds, 60)
     h, m = divmod(m, 60)
     d, h = divmod(h, 24)
-    return ('%dd' % d if d else '') + ('%dh' % h if h else '') + ('%dm' % m if m else '') + ('%ds' % m if m else '')
+    return ('%dd' % d if d else '') + ('%dh' % h if h else '') + ('%dm' % m if m else '') + ('%ds' % s if s else '')
 
 
 def sizeof_fmt(num, suffix='B'):
