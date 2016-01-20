@@ -17,8 +17,8 @@ Usage
 ```
 usage: maxpacker.py [-h] [-o OUTPUT] [-i INDEX] [-n NAME] [-f FORMAT]
                     [--p7z-args P7Z_ARGS] [--p7z-cmd P7Z_CMD]
-                    [--tar-sort {0,1,2,3}] [-m MAXFILESIZE]
-                    [--minfilesize MINFILESIZE] [-e EXCLUDE]
+                    [--tar-sort {0,1,2,3}] [-r ROOT] [--totalsize TOTALSIZE]
+                    [-m MAXFILESIZE] [--minfilesize MINFILESIZE] [-e EXCLUDE]
                     [--include INCLUDE] [--exclude-re EXCLUDE_RE]
                     [--include-re INCLUDE_RE] [-a AFTER] [-b BEFORE]
                     [-s MAXPARTSIZE] [--maxfilenum MAXFILENUM] [-p PART]
@@ -55,6 +55,10 @@ Output:
 Filter:
   options for filtering files
 
+  -r ROOT, --root ROOT  relative path root (Default: the longest prefix of all
+                        paths)
+  --totalsize TOTALSIZE
+                        total size limit
   -m MAXFILESIZE, --maxfilesize MAXFILESIZE
                         max size of each file
   --minfilesize MINFILESIZE

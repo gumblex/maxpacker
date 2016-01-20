@@ -73,11 +73,11 @@ def splitpath(path):
     folders = []
     path = path.rstrip(r'\\').rstrip(r'/')
     while 1:
-        path,folder = os.path.split(path)
-        if folder != "":
+        path, folder = os.path.split(path)
+        if folder:
             folders.append(folder)
         else:
-            if path != "":
+            if path:
                 folders.append(path)
             break
     folders.reverse()
@@ -97,10 +97,9 @@ def human2bytes(s):
     try:
         return int(s)
     except ValueError:
-        symbols = ('B', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y')
+        symbols = 'BKMGTPEZY'
         letter = s[-1:].strip().upper()
-        num = s[:-1]
-        num = float(num)
+        num = float(s[:-1])
         prefix = {symbols[0]: 1}
         for i, s in enumerate(symbols[1:]):
             prefix[s] = 1 << (i+1)*10
@@ -144,6 +143,7 @@ class Volume:
     def scanpaths(self, paths, prefix=None):
         prefix = prefix or os.path.join(*os.path.commonprefix(tuple(map(splitpath, map(os.path.abspath, paths)))))
         fl = []
+        estsize = 0
         ignored = []
         logging.info("Scanning files...")
         for path in paths:
@@ -151,7 +151,9 @@ class Volume:
                 try:
                     relfn = os.path.relpath(path, prefix)
                     if self.ffilter(relfn, prefix):
-                        fl.append((os.path.relpath(path, prefix), os.path.getsize(path), os.path.getsize(path)))
+                        filesize = os.path.getsize(path)
+                        fl.append((os.path.relpath(path, prefix), filesize, filesize))
+                        estsize += min(self.samplesize, filesize)
                     else:
                         ignored.append(path)
                 except Exception as ex:
@@ -163,7 +165,9 @@ class Volume:
                         relfn = os.path.relpath(fn, prefix)
                         try:
                             if self.ffilter(relfn, prefix):
-                                fl.append((relfn, os.path.getsize(fn), os.path.getsize(fn)))
+                                filesize = os.path.getsize(fn)
+                                fl.append((relfn, filesize, filesize))
+                                estsize += min(self.samplesize, filesize)
                             else:
                                 ignored.append((relfn, os.path.getsize(fn)))
                         except Exception as ex:
@@ -178,7 +182,8 @@ class Volume:
         # estimate compressd size
         if callable(self.compressfunc):
             logging.info("Calculating estimated compressed size...")
-            eta = ETA(len(fl), min_ms_between_updates=500)
+            eta = ETA(estsize, min_ms_between_updates=500)
+            estcurrent = 0
             for k, v in enumerate(fl):
                 filename, size, size2 = v
                 fn = os.path.join(prefix, filename)
@@ -186,7 +191,8 @@ class Volume:
                     fl[k] = (filename, size, self.estcompresssize(fn, size))
                 except Exception as ex:
                     logging.exception("Can't access " + path)
-                eta.print_status()
+                estcurrent += min(self.samplesize, size)
+                eta.print_status(estcurrent)
             eta.done()
         if self.totalsizelim:
             filtered = []
@@ -732,6 +738,7 @@ def main():
     group1.add_argument("--tar-sort", help="sort file in a partition (only for -f tar.*z). 0: no sort, 1: normal sort, 2(default): 7z-style sort within a directory, 3: 7z-style sort within a partition.", type=int, choices=(0, 1, 2, 3), default=2)
 
     group2 = parser.add_argument_group('Filter', 'options for filtering files')
+    group2.add_argument("-r", "--root", help="relative path root (Default: the longest prefix of all paths)")
     group2.add_argument("--totalsize", help="total size limit")
     group2.add_argument("-m", "--maxfilesize", help="max size of each file")
     group2.add_argument("--minfilesize", help="min size of each file")
@@ -751,7 +758,7 @@ def main():
     args = parser.parse_args()
 
     pathlist = args.PATH
-    basedir = basepath(pathlist)
+    basedir = args.root or basepath(pathlist)
 
     if args.part:
         packer = PartNumberLimitPacker(args.part)
