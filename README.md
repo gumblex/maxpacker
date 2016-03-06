@@ -15,13 +15,15 @@ Usage
 -----
 
 ```
-usage: maxpacker.py [-h] [-o OUTPUT] [-i INDEX] [-n NAME] [-f FORMAT]
+usage: maxpacker.py [-h] [-o DIR] [-i FILE] [-n PATTERN] [-f FORMAT]
                     [--p7z-args P7Z_ARGS] [--p7z-cmd P7Z_CMD]
-                    [--tar-sort {0,1,2,3}] [-r ROOT] [--totalsize TOTALSIZE]
-                    [-m MAXFILESIZE] [--minfilesize MINFILESIZE] [-e EXCLUDE]
-                    [--include INCLUDE] [--exclude-re EXCLUDE_RE]
-                    [--include-re INCLUDE_RE] [-a AFTER] [-b BEFORE]
-                    [-s MAXPARTSIZE] [--maxfilenum MAXFILENUM] [-p PART]
+                    [--tar-sort {0,1,2,3}] [-r DIR] [--totalsize TOTALSIZE]
+                    [-m SIZE] [--minfilesize SIZE] [-e PATTERN]
+                    [--exclude-from FILE] [--include PATTERN]
+                    [--include-from FILE] [--exclude-re PATTERN]
+                    [--exclude-re-from FILE] [--include-re PATTERN]
+                    [--include-re-from FILE] [-a AFTER] [-b BEFORE] [-s SIZE]
+                    [--maxfilenum NUM] [-p NUM]
                     PATH [PATH ...]
 
 A flexible backup tool.
@@ -35,11 +37,11 @@ optional arguments:
 Output:
   output control
 
-  -o OUTPUT, --output OUTPUT
-                        output location
-  -i INDEX, --index INDEX
+  -o DIR, --output DIR  output location
+  -i FILE, --index FILE
                         index file
-  -n NAME, --name NAME  output file/folder name format (Default: %03d[.ext])
+  -n PATTERN, --name PATTERN
+                        output file/folder name format (Default: %03d[.ext])
   -f FORMAT, --format FORMAT
                         output format, can be one of 'none', 'copy', 'link',
                         '7z', 'zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.xz'
@@ -55,21 +57,28 @@ Output:
 Filter:
   options for filtering files
 
-  -r ROOT, --root ROOT  relative path root (Default: the longest prefix of all
+  -r DIR, --root DIR    relative path root (Default: the longest prefix of all
                         paths)
   --totalsize TOTALSIZE
                         total size limit
-  -m MAXFILESIZE, --maxfilesize MAXFILESIZE
+  -m SIZE, --maxfilesize SIZE
                         max size of each file
-  --minfilesize MINFILESIZE
-                        min size of each file
-  -e EXCLUDE, --exclude EXCLUDE
+  --minfilesize SIZE    min size of each file
+  -e PATTERN, --exclude PATTERN
                         exclude files that match the rsync-style pattern
-  --include INCLUDE     include files that match the rsync-style pattern
-  --exclude-re EXCLUDE_RE
-                        exclude files that match the regex pattern
-  --include-re INCLUDE_RE
-                        include files that match the regex pattern
+  --exclude-from FILE   read exclude patterns from FILE, one pattern per line.
+                        Ignore completely empty lines.
+  --include PATTERN     include files that match the rsync-style pattern
+  --include-from FILE   read include patterns from FILE, one pattern per line.
+                        Ignore completely empty lines.
+  --exclude-re PATTERN  exclude files that match the regex pattern
+  --exclude-re-from FILE
+                        read exclude regexes from FILE, one regex per line.
+                        Ignore completely empty lines.
+  --include-re PATTERN  include files that match the regex pattern
+  --include-re-from FILE
+                        read include regexes from FILE, one regex per line.
+                        Ignore completely empty lines.
   -a AFTER, --after AFTER
                         select files whose modification time is after this
                         value (Format: %Y%m%d%H%M%S, eg. 20140101120000, use
@@ -82,11 +91,10 @@ Filter:
 Partition:
   partition methods
 
-  -s MAXPARTSIZE, --maxpartsize MAXPARTSIZE
+  -s SIZE, --maxpartsize SIZE
                         max partition size
-  --maxfilenum MAXFILENUM
-                        max file number per partition
-  -p PART, --part PART  partition number (overrides: -s, --maxfilenum)
+  --maxfilenum NUM      max file number per partition
+  -p NUM, --part NUM    partition number (overrides: -s, --maxfilenum)
 ```
 
 License
