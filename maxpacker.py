@@ -21,7 +21,7 @@ import subprocess
 
 from eta import ETA
 
-__version__ = '2.0'
+__version__ = '2.1'
 
 _ig1 = operator.itemgetter(1)
 _psize = operator.attrgetter('size')
@@ -729,30 +729,34 @@ def main():
     parser = argparse.ArgumentParser(description="A flexible backup tool.")
 
     group1 = parser.add_argument_group('Output', 'output control')
-    group1.add_argument("-o", "--output", help="output location", default=".")
-    group1.add_argument("-i", "--index", help="index file", default="index.txt")
-    group1.add_argument("-n", "--name", help="output file/folder name format (Default: %%03d[.ext])")
+    group1.add_argument("-o", "--output", help="output location", default=".", metavar='DIR')
+    group1.add_argument("-i", "--index", help="index file", default="index.txt", metavar='FILE')
+    group1.add_argument("-n", "--name", help="output file/folder name format (Default: %%03d[.ext])", metavar='PATTERN')
     group1.add_argument("-f", "--format", help="output format, can be one of 'none', 'copy', 'link', '7z', 'zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.xz' (Default: 7z)", default="7z")
     group1.add_argument("--p7z-args", help="extra arguments for 7z (only for -f 7z) (TIP: use --p7z-args='-xxx' to avoid confusing the argument parser)")
     group1.add_argument("--p7z-cmd", help="7z program to use (Default: 7za, only for -f 7z)", default='7za')
     group1.add_argument("--tar-sort", help="sort file in a partition (only for -f tar.*z). 0: no sort, 1: normal sort, 2(default): 7z-style sort within a directory, 3: 7z-style sort within a partition.", type=int, choices=(0, 1, 2, 3), default=2)
 
     group2 = parser.add_argument_group('Filter', 'options for filtering files')
-    group2.add_argument("-r", "--root", help="relative path root (Default: the longest prefix of all paths)")
+    group2.add_argument("-r", "--root", help="relative path root (Default: the longest prefix of all paths)", metavar='DIR')
     group2.add_argument("--totalsize", help="total size limit")
-    group2.add_argument("-m", "--maxfilesize", help="max size of each file")
-    group2.add_argument("--minfilesize", help="min size of each file")
-    group2.add_argument("-e", "--exclude", help="exclude files that match the rsync-style pattern", action='append')
-    group2.add_argument("--include", help="include files that match the rsync-style pattern", action='append')
-    group2.add_argument("--exclude-re", help="exclude files that match the regex pattern", action='append')
-    group2.add_argument("--include-re", help="include files that match the regex pattern", action='append')
+    group2.add_argument("-m", "--maxfilesize", help="max size of each file", metavar='SIZE')
+    group2.add_argument("--minfilesize", help="min size of each file", metavar='SIZE')
+    group2.add_argument("-e", "--exclude", help="exclude files that match the rsync-style pattern", action='append', metavar='PATTERN')
+    group2.add_argument("--exclude-from", help="read exclude patterns from FILE, one pattern per line. Ignore completely empty lines.", metavar='FILE')
+    group2.add_argument("--include", help="include files that match the rsync-style pattern", action='append', metavar='PATTERN')
+    group2.add_argument("--include-from", help="read include patterns from FILE, one pattern per line. Ignore completely empty lines.", metavar='FILE')
+    group2.add_argument("--exclude-re", help="exclude files that match the regex pattern", action='append', metavar='PATTERN')
+    group2.add_argument("--exclude-re-from", help="read exclude regexes from FILE, one regex per line. Ignore completely empty lines.", metavar='FILE')
+    group2.add_argument("--include-re", help="include files that match the regex pattern", action='append', metavar='PATTERN')
+    group2.add_argument("--include-re-from", help="read include regexes from FILE, one regex per line. Ignore completely empty lines.", metavar='FILE')
     group2.add_argument("-a", "--after", help="select files whose modification time is after this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20140101120000, use local time zone)")
     group2.add_argument("-b", "--before", help="select files whose modification time is before this value (Format: %%Y%%m%%d%%H%%M%%S, eg. 20150601000000, use local time zone)")
 
     group3 = parser.add_argument_group('Partition', 'partition methods')
-    group3.add_argument("-s", "--maxpartsize", help="max partition size", default=0)
-    group3.add_argument("--maxfilenum", help="max file number per partition", type=int, default=0)
-    group3.add_argument("-p", "--part", help="partition number (overrides: -s, --maxfilenum)", type=int)
+    group3.add_argument("-s", "--maxpartsize", help="max partition size", default=0, metavar='SIZE')
+    group3.add_argument("--maxfilenum", help="max file number per partition", type=int, default=0, metavar='NUM')
+    group3.add_argument("-p", "--part", help="partition number (overrides: -s, --maxfilenum)", type=int, metavar='NUM')
 
     parser.add_argument("PATH", nargs='+', help="Paths to archive")
     args = parser.parse_args()
@@ -770,10 +774,22 @@ def main():
     ffilter = TrueFilter()
     if args.maxfilesize or args.minfilesize:
         ffilter |= SizeFilter(human2bytes(args.maxfilesize), human2bytes(args.minfilesize))
-    if args.exclude or args.include:
-        ffilter |= RsyncFilter(args.exclude, args.include)
-    if args.exclude_re or args.include_re:
-        ffilter |= RegexFilter(args.exclude_re, args.include_re)
+    exclude = args.exclude or []
+    include = args.include or []
+    if args.exclude_from:
+        exclude.extend(filter(None, open(args.exclude_from, 'r', encoding='utf-8').read().splitlines()))
+    if args.include_from:
+        include.extend(filter(None, open(args.include_from, 'r', encoding='utf-8').read().splitlines()))
+    if exclude or include:
+        ffilter |= RsyncFilter(exclude, include)
+    exclude = args.exclude_re or []
+    include = args.include_re or []
+    if args.exclude_re_from:
+        exclude.extend(filter(None, open(args.exclude_re_from, 'r', encoding='utf-8').read().splitlines()))
+    if args.include_re_from:
+        include.extend(filter(None, open(args.include_re_from, 'r', encoding='utf-8').read().splitlines()))
+    if exclude or include:
+        ffilter |= RegexFilter(exclude, include)
     if args.after or args.before:
         after = time.mktime(time.strptime(args.after, '%Y%m%d%H%M%S')) if args.after else None
         before = time.mktime(time.strptime(args.before, '%Y%m%d%H%M%S')) if args.before else None
